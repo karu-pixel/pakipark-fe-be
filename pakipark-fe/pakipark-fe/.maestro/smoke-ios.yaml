@@ -1,0 +1,12 @@
+appId: com.anonymous.templaterepombsingle
+tags:
+    - ios
+---
+- launchApp:
+    clearState: true
+- extendedWaitUntil:
+    visible:
+            text: "Single-root Expo boilerplate (TypeScript-first)"
+    timeout: 120000
+- assertVisible:
+        text: "Single-root Expo boilerplate (TypeScript-first)"
