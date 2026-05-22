@@ -42,6 +42,10 @@ const normalizePhone = (value = '') => {
   return '';
 };
 const isEmail = (value = '') => /\S+@\S+\.\S+/.test(value.trim());
+const isMissingRelationError = (error: any) => {
+  const message = String(error?.message || '');
+  return message.includes('schema cache') || message.includes('does not exist');
+};
 
 @Injectable()
 export class LegacyHandlerService {
@@ -131,14 +135,27 @@ export class LegacyHandlerService {
 
   private async login(body: any) {
     const raw = String(body.identifier || body.email || '').trim();
-    const email = isEmail(raw) ? raw.toLowerCase() : phoneEmail(normalizePhone(raw));
+    const loginEmails = await this.getLoginEmailCandidates(raw);
+    if (!loginEmails.length) {
+      throw new BadRequestException('Enter a valid email address or mobile number');
+    }
+
     const tempClient = createClient(
       this.configService.getOrThrow<string>('SUPABASE_URL'),
       this.configService.getOrThrow<string>('SUPABASE_SERVICE_ROLE_KEY'),
       { auth: { autoRefreshToken: false, persistSession: false } },
     );
-    const { data: loginData, error: loginError } = await tempClient.auth.signInWithPassword({ email, password: body.password });
-    if (loginError || !loginData.session?.access_token || !loginData.user) throw new BadRequestException('Invalid credentials');
+
+    let loginData: Awaited<ReturnType<typeof tempClient.auth.signInWithPassword>>['data'] | null = null;
+    for (const email of loginEmails) {
+      const { data, error } = await tempClient.auth.signInWithPassword({ email, password: body.password });
+      if (!error && data.session?.access_token && data.user) {
+        loginData = data;
+        break;
+      }
+    }
+
+    if (!loginData?.session?.access_token || !loginData.user) throw new BadRequestException('Invalid credentials');
 
     const { data: profile } = await this.client
       .schema('account')
@@ -146,7 +163,31 @@ export class LegacyHandlerService {
       .select('*')
       .eq('id', loginData.user.id)
       .maybeSingle();
-    if (!profile) throw new BadRequestException('User account not found');
+
+    // Partners/admins may be stored in account.users instead of account.profiles
+    if (!profile) {
+      const userRow = await this.findAccountUserForAuthUser(loginData.user.id);
+
+      if (!userRow) throw new BadRequestException('User account not found');
+
+      return {
+        success: true,
+        data: {
+          _id: userRow.id,
+          id: userRow.id,
+          full_name: userRow.full_name || userRow.name || '',
+          name: userRow.full_name || userRow.name || '',
+          email: userRow.email || '',
+          phone: userRow.phone || '',
+          role: userRow.role,
+          profile_picture: userRow.profilePicture || userRow.profile_picture || null,
+          two_factor_enabled: userRow.twoFactorEnabled ?? userRow.two_factor_enabled ?? false,
+          is_verified: userRow.isVerified ?? userRow.is_verified ?? false,
+          account_table: 'users',
+          token: loginData.session.access_token,
+        },
+      };
+    }
 
     // 2FA enforcement: if enabled and no code provided, signal that 2FA is required
     if (profile.two_factor_enabled && profile.two_factor_secret) {
@@ -181,6 +222,94 @@ export class LegacyHandlerService {
         token: loginData.session.access_token,
       },
     };
+  }
+
+  private async getLoginEmailCandidates(identifier: string) {
+    const raw = identifier.trim();
+    const normalizedPhone = normalizePhone(raw);
+    const candidates = new Set<string>();
+
+    if (isEmail(raw)) {
+      candidates.add(raw.toLowerCase());
+    } else if (normalizedPhone) {
+      candidates.add(phoneEmail(normalizedPhone));
+    }
+
+    const matchingRows = await Promise.all([
+      this.findLoginProfile(raw, normalizedPhone),
+      this.findLoginAccountUser(raw, normalizedPhone),
+    ]);
+
+    for (const row of matchingRows.filter(Boolean) as any[]) {
+      for (const value of [
+        row.authEmail,
+        row.auth_email,
+        row.email,
+        row.phone ? phoneEmail(normalizePhone(row.phone)) : '',
+      ]) {
+        const email = String(value || '').trim().toLowerCase();
+        if (isEmail(email)) candidates.add(email);
+      }
+
+      const authUser = await this.getAuthUserForAccountRow(row);
+      const authEmail = String(authUser?.email || '').trim().toLowerCase();
+      if (isEmail(authEmail)) candidates.add(authEmail);
+    }
+
+    return [...candidates];
+  }
+
+  private async findLoginProfile(raw: string, normalizedPhone: string) {
+    const query = this.client.schema('account').from('profiles').select('*');
+    const { data, error } = isEmail(raw)
+      ? await query.eq('email', raw.toLowerCase()).maybeSingle()
+      : normalizedPhone
+        ? await query.eq('phone', normalizedPhone).maybeSingle()
+        : { data: null, error: null };
+    if (error) throw new BadRequestException(error.message);
+    return data;
+  }
+
+  private async findLoginAccountUser(raw: string, normalizedPhone: string) {
+    const query = this.client.schema('account').from('users').select('*').is('deletedAt', null);
+    const { data, error } = isEmail(raw)
+      ? await query.eq('email', raw.toLowerCase()).maybeSingle()
+      : normalizedPhone
+        ? await query.eq('phone', normalizedPhone).maybeSingle()
+        : { data: null, error: null };
+    if (error && isMissingRelationError(error)) return null;
+    if (error) throw new BadRequestException(error.message);
+    return data;
+  }
+
+  private async getAuthUserForAccountRow(row: any) {
+    const authId = [row.supabaseId, row.supabase_id, row.authId, row.auth_id, row.id]
+      .map((value) => String(value || '').trim())
+      .find((value) => UUID_REGEX.test(value));
+
+    if (!authId) return null;
+
+    const { data, error } = await this.client.auth.admin.getUserById(authId);
+    if (error) return null;
+    return data.user || null;
+  }
+
+  private async findAccountUserForAuthUser(authUserId: string) {
+    for (const column of ['id', 'supabaseId', 'authId']) {
+      const { data, error } = await this.client
+        .schema('account')
+        .from('users')
+        .select('*')
+        .eq(column, authUserId)
+        .is('deletedAt', null)
+        .maybeSingle();
+
+      if (error && isMissingRelationError(error)) return null;
+      if (error) throw new BadRequestException(error.message);
+      if (data) return data;
+    }
+
+    return null;
   }
 
   private async registerCustomer(body: any) {
@@ -838,6 +967,8 @@ export class LegacyHandlerService {
         this.updateParkingSlotStatus(client, slotSnapshot.parking_slot_id, 'reserved'),
       ]);
 
+      await this.createBookingNotifications(data, authUser.id, locationSnapshot.location);
+
       if (action === 'createPendingBooking') {
         return {
           success: true,
@@ -874,7 +1005,7 @@ export class LegacyHandlerService {
       };
     }
 
-    if (action === 'getAllBookings') return this.list(table, req, formatBooking);
+    if (action === 'getAllBookings') return this.getScopedBookings(req);
 
     if (action === 'getBookingById') {
       const { data, error } = await table
@@ -935,6 +1066,12 @@ export class LegacyHandlerService {
       await Promise.all([
         this.adjustLocationAvailableSpots(adminClient, booking.location_id, 1),
         this.updateParkingSlotStatus(adminClient, booking.parking_slot_id, 'available'),
+        this.createPartnerBookingNotification(
+          booking.location_id,
+          data,
+          'Booking Cancelled',
+          `Booking ${data.reference} for ${data.spot || data.locationName || 'your location'} was cancelled.`,
+        ),
       ]);
 
       return {
@@ -1066,6 +1203,150 @@ export class LegacyHandlerService {
     if (action === 'getAvailableSlots') return { success: true, data: await this.availableSlots(req.params.locationId, req.query.date as string) };
 
     throw new BadRequestException(`Unsupported booking action ${action}`);
+  }
+
+  private async getScopedBookings(req: RequestWithUser) {
+    const pagination = this.getPagination(req);
+    const ownedLocationIds = await this.getPartnerLocationIdsFromParkingLots(req.user);
+    const requestedLocationId = req.query.locationId ? String(req.query.locationId) : null;
+    const scopedLocationIds = ownedLocationIds
+      ? requestedLocationId
+        ? ownedLocationIds.includes(requestedLocationId) ? [requestedLocationId] : []
+        : ownedLocationIds
+      : requestedLocationId
+        ? [requestedLocationId]
+        : null;
+
+    if (scopedLocationIds && scopedLocationIds.length === 0) {
+      return {
+        success: true,
+        data: { bookings: [], total: 0, page: pagination.page, totalPages: 0 },
+      };
+    }
+
+    let query = this.client
+      .schema('reservation')
+      .from('bookings')
+      .select('*', { count: 'exact' });
+
+    if (scopedLocationIds) query = query.in('location_id', scopedLocationIds);
+    if (req.query.status) query = query.eq('status', String(req.query.status));
+
+    const { data, error, count } = await query
+      .order('createdAt', { ascending: false })
+      .range(pagination.from, pagination.to);
+
+    if (error) throw new BadRequestException(error.message);
+
+    const rows = await this.withBookingCustomerSnapshots(data || []);
+    const bookings = rows.map((booking: any) => ({
+      ...formatBooking(booking),
+      timing: computeTimingMeta(booking),
+    }));
+
+    return {
+      success: true,
+      data: {
+        bookings,
+        total: count ?? bookings.length,
+        page: pagination.page,
+        totalPages: Math.ceil((count ?? bookings.length) / pagination.limit),
+      },
+    };
+  }
+
+  private async withBookingCustomerSnapshots(bookings: any[]) {
+    const userIds = [...new Set(bookings.map((booking) => booking.user_id || booking.userId).filter(Boolean).map(String))];
+    if (!userIds.length) return bookings;
+
+    const { data } = await this.client
+      .schema('account')
+      .from('profiles')
+      .select('id,full_name,email,phone')
+      .in('id', userIds);
+
+    const profiles = new Map((data || []).map((profile: any) => [String(profile.id), profile]));
+
+    return bookings.map((booking) => {
+      const profile = profiles.get(String(booking.user_id || booking.userId));
+      if (!profile) return booking;
+      return {
+        ...booking,
+        userName: profile.full_name || '',
+        userEmail: profile.email || '',
+        userPhone: profile.phone || '',
+      };
+    });
+  }
+
+  private async getPartnerLocationIdsFromParkingLots(user: any): Promise<string[] | null> {
+    if (user?.role !== 'business_partner') return null;
+
+    const ownerId = this.getRequestUserId({ user } as RequestWithUser);
+    if (!ownerId) return [];
+
+    const { data, error } = await this.client
+      .schema('parking_lot')
+      .from('locations')
+      .select('id')
+      .eq('owner_id', ownerId);
+
+    if (error) throw new BadRequestException(error.message);
+    return (data || []).map((location: any) => String(location.id));
+  }
+
+  private async createBookingNotifications(booking: any, customerId: string, location: any) {
+    await Promise.all([
+      this.createNotification(
+        customerId,
+        'Booking Confirmed',
+        `Your booking ${booking.reference} for ${booking.spot || location?.name || 'your parking slot'} is now ${String(booking.status || 'upcoming').replace('_', ' ')}.`,
+      ),
+      location?.owner_id
+        ? this.createPartnerBookingNotification(
+          location.owner_id,
+          booking,
+          'New Booking Received',
+          `A new booking ${booking.reference} was made for ${booking.spot || location.name || 'your location'}.`,
+        )
+        : Promise.resolve(),
+    ]);
+  }
+
+  private async createPartnerBookingNotification(locationOrPartnerId: string, booking: any, title: string, message: string) {
+    let partnerId = locationOrPartnerId;
+
+    if (booking?.location_id && locationOrPartnerId === booking.location_id) {
+      const { data } = await this.client
+        .schema('parking_lot')
+        .from('locations')
+        .select('owner_id')
+        .eq('id', booking.location_id)
+        .maybeSingle();
+      partnerId = data?.owner_id;
+    }
+
+    if (!partnerId) return;
+    await this.createNotification(partnerId, title, message);
+  }
+
+  private async createNotification(userId: string, title: string, message: string) {
+    if (!userId) return;
+
+    const { error } = await this.client
+      .schema('notifications')
+      .from('notifications')
+      .insert({
+        user_id: userId,
+        type: 'parking',
+        title,
+        message,
+        source_service: 'pakipark',
+      });
+
+    if (error) {
+      this.logger.warn(`Notification write failed: ${error.message}`);
+    }
   }
 
   private async location(action: string, req: RequestWithUser) {
@@ -1770,14 +2051,47 @@ export class LegacyHandlerService {
     const bookingBase = this.client.schema('reservation').from('bookings');
 
     if (action === 'getDashboardStats') {
-      const bookingQuery = locationId ? bookingBase.select('*').eq('location_id', locationId) : bookingBase.select('*');
-      const [{ data: bookings, error: bookingError }, { count: locationCount }, { count: userCount }] = await Promise.all([
+      const ownedLocationIds = await this.getPartnerLocationIdsFromParkingLots(req.user);
+      const scopedLocationIds = ownedLocationIds
+        ? locationId
+          ? ownedLocationIds.includes(locationId) ? [locationId] : []
+          : ownedLocationIds
+        : locationId
+          ? [locationId]
+          : null;
+
+      let bookingQuery = bookingBase.select('*');
+      if (scopedLocationIds) {
+        if (!scopedLocationIds.length) {
+          return {
+            success: true,
+            data: {
+              totalBookings: 0,
+              activeBookings: 0,
+              completedBookings: 0,
+              cancelledBookings: 0,
+              totalRevenue: 0,
+              totalLocations: 0,
+              totalUsers: 0,
+              totalSpots: 0,
+              availableSpots: 0,
+            },
+          };
+        }
+        bookingQuery = bookingQuery.in('location_id', scopedLocationIds);
+      }
+
+      let locationQuery = this.client.schema('parking_lot').from('locations').select('*', { count: 'exact' });
+      if (scopedLocationIds) locationQuery = locationQuery.in('id', scopedLocationIds);
+
+      const [{ data: bookings, error: bookingError }, { data: locations, count: locationCount }, { count: userCount }] = await Promise.all([
         bookingQuery,
-        this.client.schema('parking_lot').from('locations').select('id', { count: 'exact', head: true }),
+        locationQuery,
         this.client.schema('account').from('profiles').select('id', { count: 'exact', head: true }),
       ]);
       if (bookingError) throw new BadRequestException(bookingError.message);
       const rows = bookings || [];
+      const locationRows = locations || [];
       const revenue = rows.filter((row: any) => ['paid', 'completed'].includes(String(row.paymentStatus || row.payment_status || '').toLowerCase()) || row.status === 'completed')
         .reduce((sum: number, row: any) => sum + Number(row.finalAmount || row.final_amount || row.amount || 0), 0);
       const activeBookings = rows.filter((row: any) => ['upcoming', 'active', 'payment_pending'].includes(String(row.status))).length;
@@ -1791,6 +2105,8 @@ export class LegacyHandlerService {
           totalRevenue: Math.round(revenue * 100) / 100,
           totalLocations: locationCount || 0,
           totalUsers: userCount || 0,
+          totalSpots: locationRows.reduce((sum: number, row: any) => sum + this.getLocationTotalSpots(row), 0),
+          availableSpots: locationRows.reduce((sum: number, row: any) => sum + this.getLocationAvailableSpots(row), 0),
         },
       };
     }
