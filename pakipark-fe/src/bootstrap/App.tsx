@@ -21,6 +21,14 @@ export default function App() {
   useEffect(() => {
     const restoreSession = async () => {
       try {
+        const keepLoggedIn = await AsyncStorage.getItem('pakipark_keep_logged_in');
+        
+        if (keepLoggedIn !== 'true') {
+          // If keep me logged in was not selected, clear session on fresh reload
+          await AsyncStorage.multiRemove(['pakipark_api_token', 'pakipark_api_user']);
+          return;
+        }
+
         const token = await AsyncStorage.getItem('pakipark_api_token');
         const userStr = await AsyncStorage.getItem('pakipark_api_user');
         console.log('[restoreSession] Token found:', !!token, 'User found:', !!userStr);
@@ -32,6 +40,7 @@ export default function App() {
             setAuthenticatedAsAdmin(false); // Fallback to customer
           }
           setHasSession(true);
+          setRoute('pakipark-app'); // Automatically route to app if session restored
         }
       } catch (error) {
         console.error('Failed to restore session:', error);

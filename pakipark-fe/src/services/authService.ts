@@ -42,13 +42,9 @@ export const authService = {
       return user;
     }
 
-    if (keepLoggedIn) {
-      await saveSession(user);
-    } else {
-      // This makes sure an old saved login does not survive
-      // when the user logs in with "Keep me logged in" unchecked.
-      await clearSession();
-    }
+    // backendApi.login already saves the session
+    // We must not clearSession() here, otherwise the user is immediately logged out!
+    await saveSession(user);
 
     return user;
   },
@@ -56,11 +52,8 @@ export const authService = {
   async socialLogin(payload: SocialLoginPayload, keepLoggedIn = false) {
     const user = await backendApi.socialLogin(payload);
 
-    if (keepLoggedIn) {
-      await saveSession(user);
-    } else {
-      await clearSession();
-    }
+    // backendApi.socialLogin already saves the session
+    await saveSession(user);
 
     return user;
   },

@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
+import { EmailModule } from '../email/email.module';
 import { LegacyHandlerService } from './legacy-handler.service';
 import { AdminOnlyGuard, AdminOrTellerGuard } from './roles.guard';
 import {
@@ -20,7 +21,7 @@ import {
 } from './legacy.controllers';
 
 @Module({
-  imports: [AuthModule],
+  imports: [AuthModule, EmailModule],
   controllers: [
     AnalyticsCompatController,
     AuthCompatController,

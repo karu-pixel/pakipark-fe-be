@@ -27,17 +27,20 @@ export function SignUpScreen({
     Alert.alert(`${provider} sign up`, `Connect your ${provider} sign up flow when backend auth is ready.`);
   };
 
-  const handleCustomerSubmit = async (payload: { firstName: string; lastName: string; name: string; identifier: string; password: string; date_of_birth: string; address: string }) => {
+  const handleCustomerSubmit = async (payload: { firstName: string; lastName: string; name: string; email: string; phone: string; password: string; date_of_birth: string; address: string; city: string; province: string }) => {
     setCustomerSubmitting(true);
     try {
       await backendApi.registerCustomer({
         firstName: payload.firstName,
         lastName: payload.lastName,
         name: payload.name,
-        identifier: payload.identifier.trim(),
+        email: payload.email,
+        phone: payload.phone,
         password: payload.password,
         date_of_birth: payload.date_of_birth,
         address: payload.address,
+        city: payload.city,
+        province: payload.province,
       });
 
       if (onAuthSuccess) {

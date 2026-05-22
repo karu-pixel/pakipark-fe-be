@@ -2,7 +2,7 @@ import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import * as DocumentPicker from 'expo-document-picker';
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { ActivityIndicator, Alert, Animated, Easing, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View, Image, useWindowDimensions } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { COLORS, quickTags, mascotRateReview } from '@features/customer/data';
 import type { Booking, LocationItem, TutorialStep, VehicleFormData, VehicleType } from '@features/customer/types';
@@ -645,6 +645,7 @@ export function RateAndReviewModal({
   locations?: LocationItem[];
   recentCompletedBooking?: Booking | null;
 }>) {
+  const insets = useSafeAreaInsets();
   const [rating, setRating] = useState(0);
   const [comment, setComment] = useState('');
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
@@ -796,7 +797,7 @@ export function RateAndReviewModal({
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
       <SafeAreaView style={styles.reviewScreen}>
-        <View style={styles.reviewHeader}>
+        <View style={[styles.reviewHeader, { paddingTop: insets.top + 12 }]}>
           <View style={styles.reviewHeaderIcon}>
             <Ionicons name="chatbox-outline" size={18} color={COLORS.primary} />
           </View>

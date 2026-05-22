@@ -4,7 +4,7 @@ import * as Clipboard from 'expo-clipboard';
 import * as ImagePicker from 'expo-image-picker';
 import React, { useEffect, useMemo, useState } from 'react';
 import { Image, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View, Platform, StatusBar, KeyboardAvoidingView } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Defs, LinearGradient, Rect, Stop } from 'react-native-svg';
 
 import { COLORS, STORAGE_KEYS } from '@features/customer/data';
@@ -65,6 +65,7 @@ const profileFormFromUser = (user: ApiUser | null) => {
 };
 
 export function CustomerProfile({ visible, onClose, user, bookings, onUserUpdated }: Readonly<CustomerProfileProps>) {
+  const insets = useSafeAreaInsets();
   const [isEditing, setIsEditing] = useState(false);
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [profilePicture, setProfilePicture] = useState<string | null>(null);
@@ -442,7 +443,7 @@ export function CustomerProfile({ visible, onClose, user, bookings, onUserUpdate
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
       <SafeAreaView style={styles.safeArea}>
-        <View style={styles.headerBar}>
+        <View style={[styles.headerBar, { paddingTop: insets.top + 10 }]}>
           <Pressable onPress={onClose} style={styles.backButton}>
             <Ionicons name="arrow-back" size={18} color={COLORS.navy} />
           </Pressable>
@@ -681,7 +682,7 @@ export function CustomerProfile({ visible, onClose, user, bookings, onUserUpdate
 }
 
 const styles = StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: COLORS.surface, paddingTop: Platform.OS === 'android' ? StatusBar.currentHeight : 0 },
+  safeArea: { flex: 1, backgroundColor: COLORS.surface },
   mainContainer: { flex: 1, backgroundColor: COLORS.background },
   headerBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 18, paddingTop: 10, paddingBottom: 16, backgroundColor: COLORS.surface, borderBottomWidth: 1, borderBottomColor: COLORS.border },
   backButton: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center' },

@@ -23,6 +23,10 @@ export class EmailService {
     return this.configService.get<string>('APICENTER_TRIBE_SECRET') || 'u0ZHblGDbhaFfkIrgFwMs8JIn2GU1rmuct9Z5eK598rva1si';
   }
 
+  private get smsKey() {
+    return this.configService.get<string>('APICENTER_SMS_KEY') || '';
+  }
+
   private async makePostRequest(url: string, data: any, headers: Record<string, string> = {}): Promise<any> {
     const response = await fetch(url, {
       method: 'POST',
@@ -199,6 +203,47 @@ export class EmailService {
     } catch (error) {
       this.logger.error(`Failed to send OTP email via APICenter: ${errorMessage(error)}`);
       throw new Error('Failed to send reset email. Please try again later.');
+    }
+  }
+
+  /**
+   * Send a 6-digit OTP via SMS using the ApiCenter SMS gateway.
+   * The phone number must be in E.164 format (e.g. +639171234567).
+   */
+  async sendSmsOtp(toPhone: string, otp: string): Promise<void> {
+    // Normalise to E.164: strip non-digits then prepend +63 for PH numbers.
+    const digits = toPhone.replace(/\D/g, '');
+    let e164 = digits;
+    if (digits.startsWith('0') && digits.length === 11) {
+      e164 = `+63${digits.slice(1)}`;
+    } else if (digits.startsWith('63') && digits.length === 12) {
+      e164 = `+${digits}`;
+    } else if (digits.length === 10) {
+      e164 = `+63${digits}`;
+    }
+
+    const message = `Your PakiPark verification code is: ${otp}\n\nThis code expires in 10 minutes. Do not share it with anyone.`;
+
+    try {
+      const token = await this.getAccessToken();
+      const result = await this.makePostRequest(
+        `${this.apiBaseUrl}/api/v1/shared/sms/send`,
+        {
+          to: e164,
+          message,
+          metadata: { purpose: 'password_reset_otp' },
+        },
+        {
+          'Authorization': `Bearer ${token}`,
+          'X-SDK-Version': '1.1.2',
+          'X-SDK-Tribe-Id': this.tribeId,
+          'X-SMS-Key': this.smsKey,
+        },
+      );
+      this.logger.log(`APICenter OTP SMS sent to ${e164}. Status: ${result.status || 'unknown'}`);
+    } catch (error) {
+      this.logger.error(`Failed to send OTP SMS via APICenter: ${errorMessage(error)}`);
+      throw new Error('Failed to send SMS verification code. Please try again later.');
     }
   }
 }

@@ -133,6 +133,7 @@ function normalizeApiUser(raw: ApiUser): ApiUser {
     mobile_number: raw.mobile_number || raw.phone || '',
     date_of_birth: raw.date_of_birth || raw.dob || raw.dateOfBirth || '',
     profile_photo_url: raw.profile_photo_url || raw.profile_picture || raw.profilePicture || null,
+    two_factor_enabled: raw.two_factor_enabled ?? false,
   };
 }
 
@@ -382,10 +383,13 @@ export const backendApi = {
     firstName?: string;
     lastName?: string;
     name?: string;
-    identifier: string;
+    email: string;
+    phone: string;
     password: string;
     date_of_birth?: string;
     address?: string;
+    city?: string;
+    province?: string;
   }) {
     const user = await apiRequest<ApiUser>('/auth/register/customer', {
       method: 'POST',

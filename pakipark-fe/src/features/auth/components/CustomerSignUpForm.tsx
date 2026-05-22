@@ -6,7 +6,7 @@ import { loginColors, loginShadows } from './LoginStyles';
 import { sharedFieldStyles, SignUpField } from './SignUpShared';
 
 interface CustomerSignUpFormProps {
-  onSubmit: (payload: { firstName: string; lastName: string; name: string; identifier: string; password: string; date_of_birth: string; address: string }) => void | Promise<void>;
+  onSubmit: (payload: { firstName: string; lastName: string; name: string; email: string; phone: string; password: string; date_of_birth: string; address: string; city: string; province: string }) => void | Promise<void>;
   onLoginPress: () => void;
   onSocialPress: (provider: string) => void;
   isSubmitting?: boolean;
@@ -18,44 +18,48 @@ export function CustomerSignUpForm({
   onSocialPress,
   isSubmitting = false,
 }: CustomerSignUpFormProps) {
-  const [focusedField, setFocusedField] = useState<'firstName' | 'lastName' | 'identifier' | 'password' | 'confirm' | null>(null);
+  const [focusedField, setFocusedField] = useState<'firstName' | 'lastName' | 'email' | 'phone' | 'password' | 'confirm' | null>(null);
   const [formData, setFormData] = useState({
     firstName: '',
     lastName: '',
-    identifier: '',
+    email: '',
+    phone: '',
     password: '',
     confirm: '',
     dateOfBirth: '',
     address: '',
+    city: '',
+    province: '',
   });
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
   const [errors, setErrors] = useState({
     firstName: '',
     lastName: '',
-    identifier: '',
+    email: '',
+    phone: '',
     password: '',
     confirm: '',
     dateOfBirth: '',
     address: '',
+    city: '',
+    province: '',
   });
 
-  const isPhone = useMemo(() => /^\d/.test(formData.identifier), [formData.identifier]);
-
-  const handleIdentifierChange = (value: string) => {
-    if (/^\d+$/.test(value)) {
-      const digits = value.startsWith('63') ? value.slice(2) : value.startsWith('0') ? value.slice(1) : value;
-      setFormData((current) => ({ ...current, identifier: digits.slice(0, 10) }));
-      setErrors((current) => ({
-        ...current,
-        identifier: digits.length > 0 && digits.length < 10 ? 'Must be exactly 10 digits.' : '',
-      }));
-      return;
-    }
-
-    setFormData((current) => ({ ...current, identifier: value.trimStart() }));
-    setErrors((current) => ({ ...current, identifier: '' }));
+  const handlePhoneChange = (value: string) => {
+    const digits = value.replace(/\D/g, '');
+    let formatted = digits;
+    if (digits.startsWith('63')) formatted = digits.slice(2);
+    else if (digits.startsWith('0')) formatted = digits.slice(1);
+    
+    setFormData((current) => ({ ...current, phone: formatted.slice(0, 10) }));
+    setErrors((current) => ({
+      ...current,
+      phone: formatted.length > 0 && formatted.length < 10 ? 'Must be exactly 10 digits.' : '',
+    }));
   };
+
+
 
   const validatePassword = (value: string) => {
     if (!value) return 'Password is required.';
@@ -84,7 +88,7 @@ export function CustomerSignUpForm({
   };
 
   const handleSubmit = () => {
-    const nextErrors = { firstName: '', lastName: '', identifier: '', password: '', confirm: '', dateOfBirth: '', address: '' };
+    const nextErrors = { firstName: '', lastName: '', email: '', phone: '', password: '', confirm: '', dateOfBirth: '', address: '', city: '', province: '' };
 
     if (!formData.firstName.trim()) {
       nextErrors.firstName = 'First name is required.';
@@ -92,12 +96,11 @@ export function CustomerSignUpForm({
     if (!formData.lastName.trim()) {
       nextErrors.lastName = 'Last name is required.';
     }
-    if (!formData.identifier.trim()) {
-      nextErrors.identifier = 'Email or phone is required.';
-    } else if (isPhone && formData.identifier.length !== 10) {
-      nextErrors.identifier = 'Must be exactly 10 digits.';
-    } else if (!isPhone && !/\S+@\S+\.\S+/.test(formData.identifier.trim())) {
-      nextErrors.identifier = 'Enter a valid email address.';
+    if (!formData.email.trim() || !/\S+@\S+\.\S+/.test(formData.email.trim())) {
+      nextErrors.email = 'Enter a valid email address.';
+    }
+    if (formData.phone.length !== 10) {
+      nextErrors.phone = 'Must be exactly 10 digits.';
     }
 
     nextErrors.password = validatePassword(formData.password);
@@ -108,7 +111,13 @@ export function CustomerSignUpForm({
     }
     nextErrors.dateOfBirth = validateDate(formData.dateOfBirth);
     if (!formData.address.trim()) {
-      nextErrors.address = 'Address is required.';
+      nextErrors.address = 'Street address is required.';
+    }
+    if (!formData.city.trim()) {
+      nextErrors.city = 'City is required.';
+    }
+    if (!formData.province.trim()) {
+      nextErrors.province = 'Province is required.';
     }
 
     setErrors(nextErrors);
@@ -121,10 +130,13 @@ export function CustomerSignUpForm({
       firstName: formData.firstName.trim(),
       lastName: formData.lastName.trim(),
       name: `${formData.firstName.trim()} ${formData.lastName.trim()}`,
-      identifier: formData.identifier.trim(),
+      email: formData.email.trim(),
+      phone: formData.phone.trim(),
       password: formData.password,
       date_of_birth: formData.dateOfBirth,
       address: formData.address.trim(),
+      city: formData.city.trim(),
+      province: formData.province.trim(),
     });
   };
 
@@ -177,24 +189,41 @@ export function CustomerSignUpForm({
         </View>
       </View>
 
-      <SignUpField label="Email or Phone Number" error={errors.identifier}>
+      <SignUpField label="Email Address" error={errors.email}>
+        <View style={[sharedFieldStyles.inputShell, focusedField === 'email' ? sharedFieldStyles.inputShellFocused : undefined]}>
+          <Feather name="mail" size={14} color={focusedField === 'email' ? loginColors.accent : '#B2C0CF'} />
+          <TextInput
+            value={formData.email}
+            onChangeText={(email) => {
+              setFormData((current) => ({ ...current, email: email.trimStart() }));
+              setErrors((current) => ({ ...current, email: '' }));
+            }}
+            onFocus={() => setFocusedField('email')}
+            onBlur={() => setFocusedField(null)}
+            placeholder="name@email.com"
+            placeholderTextColor={loginColors.subtle}
+            keyboardType="email-address"
+            autoCapitalize="none"
+            style={sharedFieldStyles.input}
+          />
+        </View>
+      </SignUpField>
+
+      <SignUpField label="Mobile Number" error={errors.phone}>
         <View style={styles.inputRow}>
-          {isPhone && (
-            <View style={styles.countryCodeBox}>
-              <Text style={styles.countryCodeText}>+63</Text>
-            </View>
-          )}
-          <View style={[sharedFieldStyles.inputShell, styles.flex, focusedField === 'identifier' ? sharedFieldStyles.inputShellFocused : undefined]}>
-            <Feather name={isPhone ? 'phone' : 'mail'} size={14} color={focusedField === 'identifier' ? loginColors.accent : '#B2C0CF'} />
+          <View style={styles.countryCodeBox}>
+            <Text style={styles.countryCodeText}>+63</Text>
+          </View>
+          <View style={[sharedFieldStyles.inputShell, styles.flex, focusedField === 'phone' ? sharedFieldStyles.inputShellFocused : undefined]}>
+            <Feather name="phone" size={14} color={focusedField === 'phone' ? loginColors.accent : '#B2C0CF'} />
             <TextInput
-              value={formData.identifier}
-              onChangeText={handleIdentifierChange}
-              onFocus={() => setFocusedField('identifier')}
+              value={formData.phone}
+              onChangeText={handlePhoneChange}
+              onFocus={() => setFocusedField('phone')}
               onBlur={() => setFocusedField(null)}
-              placeholder="name@email.com or 09123456789"
+              placeholder="9123456789"
               placeholderTextColor={loginColors.subtle}
-              keyboardType={isPhone ? 'phone-pad' : 'email-address'}
-              autoCapitalize="none"
+              keyboardType="phone-pad"
               style={sharedFieldStyles.input}
             />
           </View>
@@ -270,9 +299,9 @@ export function CustomerSignUpForm({
         </View>
       </SignUpField>
 
-      <SignUpField label="Full Address" error={errors.address}>
-        <View style={[sharedFieldStyles.inputShell, { minHeight: 80, alignItems: 'flex-start', paddingVertical: 12 }, focusedField === 'address' as any ? sharedFieldStyles.inputShellFocused : undefined]}>
-          <Feather name="map-pin" size={14} color={focusedField === 'address' as any ? loginColors.accent : '#B2C0CF'} style={{ marginTop: 2 }} />
+      <SignUpField label="Street Address" error={errors.address}>
+        <View style={[sharedFieldStyles.inputShell, focusedField === 'address' as any ? sharedFieldStyles.inputShellFocused : undefined]}>
+          <Feather name="map-pin" size={14} color={focusedField === 'address' as any ? loginColors.accent : '#B2C0CF'} />
           <TextInput
             value={formData.address}
             onChangeText={(address) => {
@@ -281,13 +310,54 @@ export function CustomerSignUpForm({
             }}
             onFocus={() => setFocusedField('address' as any)}
             onBlur={() => setFocusedField(null)}
-            placeholder="123 Main St, Brgy. San Jose, Manila"
+            placeholder="123 Main St, Brgy. San Jose"
             placeholderTextColor={loginColors.subtle}
-            multiline
-            style={[sharedFieldStyles.input, { paddingVertical: 0, marginTop: -2 }]}
+            style={sharedFieldStyles.input}
           />
         </View>
       </SignUpField>
+
+      <View style={styles.passwordRow}>
+        <View style={styles.half}>
+          <SignUpField label="City" error={errors.city}>
+            <View style={[sharedFieldStyles.inputShell, focusedField === 'city' as any ? sharedFieldStyles.inputShellFocused : undefined]}>
+              <Feather name="map" size={14} color={focusedField === 'city' as any ? loginColors.accent : '#B2C0CF'} />
+              <TextInput
+                value={formData.city}
+                onChangeText={(city) => {
+                  setFormData((current) => ({ ...current, city }));
+                  setErrors((current) => ({ ...current, city: '' }));
+                }}
+                onFocus={() => setFocusedField('city' as any)}
+                onBlur={() => setFocusedField(null)}
+                placeholder="Manila"
+                placeholderTextColor={loginColors.subtle}
+                style={sharedFieldStyles.input}
+              />
+            </View>
+          </SignUpField>
+        </View>
+
+        <View style={styles.half}>
+          <SignUpField label="Province" error={errors.province}>
+            <View style={[sharedFieldStyles.inputShell, focusedField === 'province' as any ? sharedFieldStyles.inputShellFocused : undefined]}>
+              <Feather name="map" size={14} color={focusedField === 'province' as any ? loginColors.accent : '#B2C0CF'} />
+              <TextInput
+                value={formData.province}
+                onChangeText={(province) => {
+                  setFormData((current) => ({ ...current, province }));
+                  setErrors((current) => ({ ...current, province: '' }));
+                }}
+                onFocus={() => setFocusedField('province' as any)}
+                onBlur={() => setFocusedField(null)}
+                placeholder="Metro Manila"
+                placeholderTextColor={loginColors.subtle}
+                style={sharedFieldStyles.input}
+              />
+            </View>
+          </SignUpField>
+        </View>
+      </View>
 
       <Pressable
         disabled={isSubmitting}

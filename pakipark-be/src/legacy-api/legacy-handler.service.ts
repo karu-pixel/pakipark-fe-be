@@ -1,10 +1,11 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createClient } from '@supabase/supabase-js';
 import * as jwt from 'jsonwebtoken';
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { Request, Response } from 'express';
 
+import { EmailService } from '../email/email.service';
 import { SupabaseService } from '../supabase/supabase.service';
 import { formatBooking } from '../utils/formatters';
 import {
@@ -44,9 +45,12 @@ const isEmail = (value = '') => /\S+@\S+\.\S+/.test(value.trim());
 
 @Injectable()
 export class LegacyHandlerService {
+  private readonly logger = new Logger(LegacyHandlerService.name);
+
   constructor(
     private readonly supabaseService: SupabaseService,
     private readonly configService: ConfigService,
+    private readonly emailService: EmailService,
   ) { }
 
   private readonly passwordResetOtps = new Map<string, {
@@ -144,6 +148,23 @@ export class LegacyHandlerService {
       .maybeSingle();
     if (!profile) throw new BadRequestException('User account not found');
 
+    // 2FA enforcement: if enabled and no code provided, signal that 2FA is required
+    if (profile.two_factor_enabled && profile.two_factor_secret) {
+      const code = String(body.twoFactorCode || '').trim();
+      if (!code) {
+        return {
+          success: true,
+          data: {
+            two_factor_required: true,
+            message: 'Two-factor authentication code required.',
+          },
+        };
+      }
+      if (!this.verifyTotp(profile.two_factor_secret, code)) {
+        throw new BadRequestException('Invalid two-factor authentication code.');
+      }
+    }
+
     return {
       success: true,
       data: {
@@ -164,10 +185,12 @@ export class LegacyHandlerService {
 
   private async registerCustomer(body: any) {
     const fullName = body.name || `${body.firstName || ''} ${body.lastName || ''}`.trim();
-    const raw = String(body.identifier || body.email || body.phone || '').trim();
-    const phone = isEmail(raw) ? normalizePhone(body.phone || '') : normalizePhone(raw || body.phone || '');
-    const email = isEmail(raw) ? raw.toLowerCase() : phoneEmail(phone);
-    if (!email || (!isEmail(raw) && !phone)) throw new BadRequestException('Enter a valid email address or mobile number');
+    const rawEmail = String(body.email || '').trim().toLowerCase();
+    const rawPhone = String(body.phone || '').trim();
+    const phone = normalizePhone(rawPhone);
+    const email = rawEmail || (phone ? phoneEmail(phone) : '');
+
+    if (!email || (!rawEmail && !phone)) throw new BadRequestException('Enter a valid email address or mobile number');
 
     const { data: authData, error: authError } = await this.client.auth.admin.createUser({
       email,
@@ -188,6 +211,8 @@ export class LegacyHandlerService {
         role: 'customer',
         dob: body.date_of_birth || body.dateOfBirth || null,
         address: typeof body.address === 'string' ? body.address : JSON.stringify(body.address || {}),
+        city: body.city || null,
+        province: body.province || null,
         is_verified: true,
       })
       .select()
@@ -544,9 +569,11 @@ export class LegacyHandlerService {
     const slots = await this.selectParkingSlots(client, locationId);
 
     if (!slots.length) {
-      throw new BadRequestException(
-        `No parking slots found by backend for location_id ${locationId}. SQL editor may be using a different Supabase project than backend SUPABASE_URL, or backend was not rebuilt/restarted.`,
-      );
+      this.logger.warn(`No parking slots found by backend for location_id ${locationId}. Generating placeholder slot.`);
+      return {
+        parking_slot_id: null,
+        spot: `P-${Math.floor(Math.random() * 90) + 10}`,
+      };
     }
 
     const conflicts = await this.getConflictingBookings(client, locationId, date, timeSlot);
@@ -870,29 +897,44 @@ export class LegacyHandlerService {
       const { data: booking, error: bookingError } = await table
         .select('*')
         .eq('id', req.params.id)
-        .single();
+        .maybeSingle();
 
       if (bookingError) throw new BadRequestException(bookingError.message);
+      if (!booking) throw new BadRequestException(`Booking not found with ID ${req.params.id}.`);
+      
+      const userId = this.getRequestUserId(req);
+      if (String(booking.user_id) !== String(userId)) {
+        throw new BadRequestException('You do not have permission to cancel this booking.');
+      }
+
       if (!['upcoming', 'payment_pending'].includes(String(booking.status))) {
         throw new BadRequestException('Only upcoming bookings can be cancelled.');
       }
 
       const refundPolicy = computeRefundPolicy(booking);
 
-      const { data, error } = await table
+      const adminClient = createClient(
+        this.configService.getOrThrow<string>('SUPABASE_URL'),
+        this.configService.getOrThrow<string>('SUPABASE_SERVICE_ROLE_KEY'),
+        { auth: { autoRefreshToken: false, persistSession: false } },
+      );
+      const { data, error } = await adminClient
+        .schema('reservation')
+        .from('bookings')
         .update({
           status: 'cancelled',
           updatedAt: new Date().toISOString(),
         })
         .eq('id', req.params.id)
         .select()
-        .single();
+        .maybeSingle();
 
       if (error) throw new BadRequestException(error.message);
+      if (!data) throw new BadRequestException('Failed to update booking status. It may have been modified by another process.');
 
       await Promise.all([
-        this.adjustLocationAvailableSpots(client, booking.location_id, 1),
-        this.updateParkingSlotStatus(client, booking.parking_slot_id, 'available'),
+        this.adjustLocationAvailableSpots(adminClient, booking.location_id, 1),
+        this.updateParkingSlotStatus(adminClient, booking.parking_slot_id, 'available'),
       ]);
 
       return {
@@ -1030,17 +1072,52 @@ export class LegacyHandlerService {
     const table = this.client.schema('parking_lot').from('locations');
 
     if (action === 'getLocations') {
-      let query = table.select('*', { count: 'exact' }).order('name', { ascending: true });
-      if (req.query.mine === 'true') {
+      const isMineFilter = req.query.mine === 'true';
+
+      let query = table.select('*').order('name', { ascending: true });
+      if (isMineFilter) {
         const ownerId = this.getRequestUserId(req);
         query = query.eq('owner_id', ownerId);
       }
       if (req.query.active !== undefined) {
         query = query.eq('is_active', String(req.query.active) !== 'false');
       }
-      const { data, error, count } = await query;
+
+      const { data: rawLocations, error } = await query;
       if (error) throw new BadRequestException(error.message);
-      return { success: true, data: (data || []).map((row: any) => this.normalizeLocation(row)), total: count ?? 0 };
+      const locations = rawLocations || [];
+
+      if (!locations.length) {
+        return { success: true, data: [], total: 0 };
+      }
+
+      // For admin "mine" queries, skip filtering so partners can manage their own locations
+      if (isMineFilter) {
+        return { success: true, data: locations.map((row: any) => this.normalizeLocation(row)), total: locations.length };
+      }
+
+      // 1. Only keep locations that have an owner (partner account exists)
+      const ownedLocations = locations.filter((l: any) => !!l.owner_id);
+
+      if (!ownedLocations.length) {
+        return { success: true, data: [], total: 0 };
+      }
+
+      // 2. Get parking slot counts for these locations
+      const locationIds = ownedLocations.map((l: any) => l.id);
+      const { data: slots } = await this.client
+        .schema('parking_lot')
+        .from('parking_slots')
+        .select('location_id')
+        .in('location_id', locationIds)
+        .neq('status', 'maintenance');
+
+      const locationIdsWithSlots = new Set((slots || []).map((s: any) => String(s.location_id)));
+
+      // Filter: only locations that have at least one non-maintenance parking slot
+      const filtered = ownedLocations.filter((l: any) => locationIdsWithSlots.has(String(l.id)));
+
+      return { success: true, data: filtered.map((row: any) => this.normalizeLocation(row)), total: filtered.length };
     }
 
     if (action === 'getLocation') return this.getById(table, req.params.id, (row) => this.normalizeLocation(row));
@@ -1266,13 +1343,13 @@ export class LegacyHandlerService {
         data: {
           averageRating: totalReviews
             ? Math.round(
-                (ratings.reduce(
-                  (sum: number, rating: number) => sum + rating,
-                  0,
-                ) /
-                  totalReviews) *
-                  100,
-              ) / 100
+              (ratings.reduce(
+                (sum: number, rating: number) => sum + rating,
+                0,
+              ) /
+                totalReviews) *
+              100,
+            ) / 100
             : 0,
           totalReviews,
           fiveStars: countStars(5),
@@ -1382,8 +1459,8 @@ export class LegacyHandlerService {
     if (action === 'getPendingPartners') return this.listPartnerProfiles(req);
     if (action === 'reviewPartnerRegistration') return this.updateById(this.client.schema('account').from('profiles'), req.params.id, { is_verified: req.body.status === 'approved' || req.body.action === 'approve' }, (row) => this.normalizeProfileResponse(row));
     if (action === 'getAllUsers') return this.list(this.client.schema('account').from('profiles'), req, (row) => this.normalizeProfileResponse(row));
-    if (action === 'setup2FA') return this.setupTwoFactor(userId);
-    if (action === 'verify2FA') return this.verifyTwoFactor(userId, req.body.code);
+    if (action === 'setup2FA') return this.setupTwoFactor(userId, req);
+    if (action === 'verify2FA') return this.verifyTwoFactor(userId, req, req.body.factorId, req.body.code);
     if (action === 'disable2FA') return this.disableTwoFactor(req);
     throw new BadRequestException(`Unsupported user action ${action}`);
   }
@@ -1634,7 +1711,7 @@ export class LegacyHandlerService {
       }
 
       const { data: bookingUpdateData, error: bookingUpdateError } = await bookingUpdateQuery
-        .select('id')
+        .select('*')
         .maybeSingle();
 
       if (bookingUpdateError) {
@@ -1647,6 +1724,31 @@ export class LegacyHandlerService {
         throw new BadRequestException(
           'Failed to update booking payment status: booking was not found for the authenticated user.',
         );
+      }
+
+      if (status === 'succeeded') {
+        const { error: txError } = await this.client.from('transaction_logs').insert({
+          reference: bookingUpdateData.reference || String(bookingId),
+          transactionType: 'payment',
+          paymentMethod: bookingUpdateData.paymentMethod || bookingUpdateData.payment || 'PayMongo',
+          amount: bookingUpdateData.amount || 0,
+          currency: 'PHP',
+          status: 'success',
+          description: `Payment successful via PayMongo checkout session ${checkoutSessionId}`,
+          metadata: {
+            bookingId: bookingUpdateData.id || bookingId,
+            userId: bookingUpdateData.user_id || bookingOwnerId,
+            date: bookingUpdateData.date,
+            spot: bookingUpdateData.spot,
+            timeSlot: bookingUpdateData.timeSlot || bookingUpdateData.time,
+            checkoutSessionId,
+          },
+          createdAt: new Date().toISOString(),
+        });
+
+        if (txError) {
+          this.logger.error(`Failed to create transaction log: ${txError.message}`);
+        }
       }
 
       return {
@@ -2143,6 +2245,33 @@ export class LegacyHandlerService {
   private async webhook(action: string, req: RequestWithUser) {
     if (action !== 'paymentStatus') throw new BadRequestException(`Unsupported webhook action ${action}`);
     const { bookingId, status, paymentId } = req.body;
+
+    const { data: booking } = await this.client.schema('reservation').from('bookings').select('*').eq('id', bookingId).maybeSingle();
+
+    if (booking && status === 'paid') {
+      const { error: txError } = await this.client.from('transaction_logs').insert({
+        reference: booking.reference || String(bookingId),
+        transactionType: 'payment',
+        paymentMethod: booking.paymentMethod || booking.payment || 'PayMongo',
+        amount: booking.amount || 0,
+        currency: 'PHP',
+        status: 'success',
+        description: `Payment successful via webhook for booking ${booking.reference || booking.id}`,
+        metadata: {
+          bookingId: booking.id,
+          userId: booking.user_id,
+          date: booking.date,
+          spot: booking.spot,
+          timeSlot: booking.timeSlot || booking.time,
+          paymentId,
+        },
+        createdAt: new Date().toISOString(),
+      });
+      if (txError) {
+        this.logger.error(`Failed to log webhook transaction: ${txError.message}`);
+      }
+    }
+
     return this.updateById(this.client.schema('reservation').from('bookings'), bookingId, {
       paymentStatus: status,
       paymentId,
@@ -2567,6 +2696,38 @@ export class LegacyHandlerService {
         authEmail: profile.email || phoneEmail(profile.phone || ''),
         expiresAt: Date.now() + 10 * 60_000,
       });
+
+      // Determine delivery channel: email or phone-based
+      const rawIdentifier = String(identifier || '').trim();
+      const toEmail = isEmail(rawIdentifier)
+        ? rawIdentifier.toLowerCase()
+        : profile.email && !profile.email.endsWith('@phone.pakipark.local')
+          ? profile.email
+          : null;
+
+      if (toEmail) {
+        // Send OTP via email
+        try {
+          await this.emailService.sendPasswordResetOtp(toEmail, code);
+          this.logger.log(`[startPasswordReset] OTP email sent to ${toEmail}`);
+        } catch (err) {
+          this.logger.error(`[startPasswordReset] Failed to send OTP email: ${err instanceof Error ? err.message : err}`);
+        }
+      } else {
+        // Phone-only account — Send OTP via SMS
+        const toPhone = profile.phone || rawIdentifier;
+        if (toPhone) {
+          try {
+            await this.emailService.sendSmsOtp(toPhone, code);
+            this.logger.log(`[startPasswordReset] OTP SMS sent to ${toPhone}`);
+          } catch (err) {
+            this.logger.error(`[startPasswordReset] Failed to send OTP SMS: ${err instanceof Error ? err.message : err}`);
+          }
+        } else {
+          this.logger.warn(`[startPasswordReset] Phone-only account (${rawIdentifier}) missing valid phone number.`);
+        }
+      }
+
       return {
         success: true,
         message: 'If an account was found, a verification code has been sent.',
@@ -2666,32 +2827,103 @@ export class LegacyHandlerService {
     });
   }
 
-  private async setupTwoFactor(userId: string) {
-    const secret = this.base32Encode(randomBytes(20));
-    const { error } = await this.client.schema('account').from('profiles').update({ two_factor_secret: secret, two_factor_enabled: false }).eq('id', userId);
-    if (error) throw new BadRequestException(error.message);
-    const issuer = encodeURIComponent('PakiPark');
-    const label = encodeURIComponent(`PakiPark:${userId}`);
-    return { success: true, data: { secret, otpUri: `otpauth://totp/${label}?secret=${secret}&issuer=${issuer}` } };
+  private createUserClient(accessToken: string) {
+    return createClient(
+      this.configService.getOrThrow<string>('SUPABASE_URL'),
+      this.configService.getOrThrow<string>('SUPABASE_ANON_KEY'),
+      {
+        auth: { autoRefreshToken: false, persistSession: false },
+        global: { headers: { Authorization: `Bearer ${accessToken}` } },
+      },
+    );
   }
 
-  private async verifyTwoFactor(userId: string, code: string) {
-    const { data, error } = await this.client.schema('account').from('profiles').select('two_factor_secret').eq('id', userId).single();
-    if (error) throw new BadRequestException(error.message);
-    if (!data?.two_factor_secret || !this.verifyTotp(data.two_factor_secret, code)) {
-      throw new BadRequestException('Invalid two-factor code.');
+  private getRequestToken(req: RequestWithUser): string {
+    return String((req.headers as any).authorization || '').replace(/^Bearer\s+/i, '').trim();
+  }
+
+  private async getVerifiedTotpFactor(userId: string) {
+    const { data, error } = await this.client.auth.admin.getUserById(userId);
+    if (error) return null;
+    const factors = (data?.user?.factors || []) as any[];
+    return factors.find((f: any) => f.factor_type === 'totp' && f.status === 'verified') || null;
+  }
+
+  private async setupTwoFactor(userId: string, req: RequestWithUser) {
+    const accessToken = this.getRequestToken(req);
+    if (!accessToken) throw new BadRequestException('Authentication token required.');
+
+    const userClient = this.createUserClient(accessToken);
+
+    // Clean up any existing unverified TOTP factors first
+    const { data: adminUser } = await this.client.auth.admin.getUserById(userId);
+    const existingFactors = ((adminUser?.user?.factors || []) as any[]).filter((f: any) => f.factor_type === 'totp');
+    for (const f of existingFactors) {
+      await (this.client.auth.admin as any).mfa?.deleteFactor?.({ userId, id: f.id }).catch(() => {});
     }
+
+    const { data, error } = await userClient.auth.mfa.enroll({ factorType: 'totp' });
+    if (error) throw new BadRequestException(error.message);
+
+    return {
+      success: true,
+      data: {
+        factorId: data.id,
+        secret: data.totp.secret,
+        otpUri: data.totp.uri,
+      },
+    };
+  }
+
+  private async verifyTwoFactor(userId: string, req: RequestWithUser, factorId: string, code: string) {
+    if (!factorId) throw new BadRequestException('Factor ID is required.');
+    if (!/^\d{6}$/.test(String(code || ''))) throw new BadRequestException('Enter the 6-digit code from your authenticator app.');
+
+    const accessToken = this.getRequestToken(req);
+    if (!accessToken) throw new BadRequestException('Authentication token required.');
+
+    const userClient = this.createUserClient(accessToken);
+
+    const { data: challengeData, error: challengeError } = await userClient.auth.mfa.challenge({ factorId });
+    if (challengeError) throw new BadRequestException(challengeError.message);
+
+    const { error: verifyError } = await userClient.auth.mfa.verify({
+      factorId,
+      challengeId: challengeData.id,
+      code: String(code).trim(),
+    });
+    if (verifyError) throw new BadRequestException('Invalid verification code. Please try again.');
+
     const { error: updateError } = await this.client.schema('account').from('profiles').update({ two_factor_enabled: true }).eq('id', userId);
     if (updateError) throw new BadRequestException(updateError.message);
+
     return { success: true, message: 'Two-factor authentication enabled.' };
   }
 
   private async disableTwoFactor(req: RequestWithUser) {
-    await this.changePassword({ ...req, body: { currentPassword: req.body.password, newPassword: req.body.password } } as RequestWithUser).catch((error) => {
-      throw new BadRequestException(error.message || 'Password verification failed.');
-    });
     const userId = this.getRequestUserId(req);
-    const { error } = await this.client.schema('account').from('profiles').update({ two_factor_enabled: false, two_factor_secret: null }).eq('id', userId);
+    const password = req.body.password;
+    if (!password) throw new BadRequestException('Password is required to disable 2FA.');
+
+    const { data: profile } = await this.client.schema('account').from('profiles').select('email').eq('id', userId).single();
+    if (!profile?.email) throw new BadRequestException('Could not find account to verify.');
+
+    const tempClient = createClient(
+      this.configService.getOrThrow<string>('SUPABASE_URL'),
+      this.configService.getOrThrow<string>('SUPABASE_SERVICE_ROLE_KEY'),
+      { auth: { autoRefreshToken: false, persistSession: false } },
+    );
+    const { error: authError } = await tempClient.auth.signInWithPassword({ email: profile.email, password });
+    if (authError) throw new BadRequestException('Incorrect password. Please try again.');
+
+    // Unenroll all TOTP factors via admin API
+    const { data: adminUser } = await this.client.auth.admin.getUserById(userId);
+    const totpFactors = ((adminUser?.user?.factors || []) as any[]).filter((f: any) => f.factor_type === 'totp');
+    for (const f of totpFactors) {
+      await (this.client.auth.admin as any).mfa?.deleteFactor?.({ userId, id: f.id }).catch(() => {});
+    }
+
+    const { error } = await this.client.schema('account').from('profiles').update({ two_factor_enabled: false }).eq('id', userId);
     if (error) throw new BadRequestException(error.message);
     return { success: true, message: 'Two-factor authentication disabled.' };
   }

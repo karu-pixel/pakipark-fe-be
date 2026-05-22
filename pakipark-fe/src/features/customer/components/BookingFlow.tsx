@@ -203,8 +203,9 @@ export function BookingFlow({ location_id, location, address, cars, onBack, onBe
   const [dateInput, setDateInput] = useState(FALLBACK_DATE.fieldDisplay);
   const [visibleCalendarMonth, setVisibleCalendarMonth] = useState(() => new Date(FALLBACK_DATE.year, FALLBACK_DATE.month, 1));
   const [showDatePicker, setShowDatePicker] = useState(false);
-  const [startTime, setStartTime] = useState<string | null>(null);
-  const [endTime, setEndTime] = useState<string | null>(null);
+  const [selectedSlot, setSelectedSlot] = useState<TimeSlot | null>(null);
+  const [showFloorModal, setShowFloorModal] = useState(false);
+  const [preferredFloor, setPreferredFloor] = useState<string | null>(null);
   const [selectedCar] = useState<Vehicle | null>(cars[0] ?? null);
   const [paymentMethod, setPaymentMethod] = useState<'gcash' | 'maya' | 'card'>('gcash');
   const [availableSlots, setAvailableSlots] = useState<TimeSlot[]>(ALL_SLOTS);
@@ -246,8 +247,9 @@ export function BookingFlow({ location_id, location, address, cars, onBack, onBe
           })
           .map((item: any) => {
             const start = item.slot.split(' - ')[0];
+            const end = item.slot.split(' - ')[1] || `${parseInt(start.split(':')[0], 10) + 1}:00`;
             const hour = parseInt(start.split(':')[0], 10);
-            const label = hour === 12 ? '12 PM' : hour > 12 ? `${hour - 12} PM` : `${hour} AM`;
+            const label = `${start} - ${end}`;
 
             let status: SlotStatus = item.isFull ? 'taken' : 'available';
 
@@ -294,36 +296,17 @@ export function BookingFlow({ location_id, location, address, cars, onBack, onBe
     return cells;
   }, [visibleCalendarMonth]);
 
-  const calculateHours = () => {
-    if (!startTime || !endTime) {
-      return 0;
-    }
+  const calculateHours = () => 1;
 
-    return Math.max(1, slotHour(endTime) - slotHour(startTime));
-  };
-
-  const totalAmount = calculateHours() * 50;
-  const canContinue = Boolean(startTime && endTime && slotHour(startTime) < slotHour(endTime));
-  const selectedTimeRange = canContinue ? `${formatHour(startTime || '11:00')} -> ${formatHour(endTime || '22:00')}` : '';
+  const totalAmount = 100;
+  const canContinue = Boolean(selectedSlot);
+  const selectedTimeRange = selectedSlot ? selectedSlot.label : '';
 
   const handleSlotPress = (slot: TimeSlot) => {
     if (slot.status !== 'available') {
       return;
     }
-
-    if (!startTime || (startTime && endTime)) {
-      setStartTime(slot.value);
-      setEndTime(null);
-      return;
-    }
-
-    if (slotHour(slot.value) <= slotHour(startTime)) {
-      setStartTime(slot.value);
-      setEndTime(null);
-      return;
-    }
-
-    setEndTime(slot.value);
+    setSelectedSlot(slot);
   };
 
   const handleDateInputChange = (value: string) => {
@@ -354,8 +337,7 @@ export function BookingFlow({ location_id, location, address, cars, onBack, onBe
       if (!canContinue) {
         return;
       }
-
-      setStep('payment');
+      setShowFloorModal(true);
       return;
     }
 
@@ -364,9 +346,16 @@ export function BookingFlow({ location_id, location, address, cars, onBack, onBe
     }
   };
 
+  const proceedToPayment = (floor: string) => {
+    setPreferredFloor(floor);
+    setShowFloorModal(false);
+    setStep('payment');
+  };
+
   const buildBookingDetails = () => {
-    const safeStart = startTime || '11:00';
-    const safeEnd = endTime || '22:00';
+    const safeStart = selectedSlot ? selectedSlot.value : '11:00';
+    const endHourStr = `${parseInt(safeStart.split(':')[0], 10) + 1}:00`;
+    const safeEnd = selectedSlot ? (selectedSlot.label.split(' - ')[1] || endHourStr) : '12:00';
 
     return {
       locationId: location_id,
@@ -375,16 +364,17 @@ export function BookingFlow({ location_id, location, address, cars, onBack, onBe
       locationName: displayLocationName,
       address: displayLocationAddress,
       locationAddress: displayLocationAddress,
-      spot: `P-${Math.floor(Math.random() * 90) + 10}`,
+      spot: preferredFloor === 'Auto-Assign Best Spot' ? `P-${Math.floor(Math.random() * 90) + 10}` : `${preferredFloor}-${Math.floor(Math.random() * 90) + 10}`,
       date: selectedDate.fullDisplay,
-      time: `${formatHour(safeStart)} - ${formatHour(safeEnd)}`,
-      timeSlot: `${safeStart} - ${safeEnd}`,
+      time: selectedSlot ? selectedSlot.label : `${safeStart} - ${safeEnd}`,
+      timeSlot: selectedSlot ? selectedSlot.label : `${safeStart} - ${safeEnd}`,
       vehicle: selectedVehicleLabel,
       vehicleId: selectedCarAny?.id ?? selectedCarAny?._id,
       vehicleType: selectedCarAny?.type,
       vehiclePlateNumber: bookingPlate,
       bookingPlate,
       type: 'Fixed',
+      preferredFloor: preferredFloor,
       parkingSlotType: 'Fixed',
       price: `P${totalAmount}`,
       amount: totalAmount,
@@ -520,13 +510,12 @@ export function BookingFlow({ location_id, location, address, cars, onBack, onBe
         <View style={styles.prototypeCard}>
           <View style={styles.slotHeader}>
             <Text style={styles.prototypeLabel}>Select Time Slot</Text>
-            <Text style={styles.slotHint}>Tap check-in {'->'} check-out</Text>
+            <Text style={styles.slotHint}>Tap a slot to book</Text>
           </View>
 
           <View style={styles.legendRow}>
             {[
               { label: 'Selected', color: COLORS.navy },
-              { label: 'Range', color: '#F6C7AF' },
               { label: 'Taken', color: '#FFD9DD' },
               { label: 'Unavailable', color: '#E5E7EB' },
             ].map((item) => (
@@ -547,14 +536,13 @@ export function BookingFlow({ location_id, location, address, cars, onBack, onBe
             </View>
           ) : null}
 
+          <Text style={{ fontSize: 11, fontWeight: '800', color: COLORS.subtle, letterSpacing: 1.2, textTransform: 'uppercase', marginBottom: 12, marginTop: 20 }}>AVAILABLE 1-HOUR TIME SLOTS</Text>
           <View style={styles.slotGrid}>
             {loadingSlots ? (
               <Text style={{ textAlign: 'center', marginTop: 20, color: COLORS.muted }}>Loading time slots...</Text>
             ) : (
               availableSlots.map((slot) => {
-                const hour = slotHour(slot.value);
-                const isEndpoint = slot.value === startTime || slot.value === endTime;
-                const isInRange = Boolean(startTime && endTime && hour > slotHour(startTime) && hour < slotHour(endTime));
+                const isEndpoint = selectedSlot?.value === slot.value;
                 const isTaken = slot.status === 'taken';
                 const isUnavailable = slot.status === 'unavailable';
 
@@ -566,7 +554,6 @@ export function BookingFlow({ location_id, location, address, cars, onBack, onBe
                     style={[
                       styles.slotButton,
                       isEndpoint ? styles.slotButtonSelected : null,
-                      isInRange ? styles.slotButtonRange : null,
                       isTaken ? styles.slotButtonTaken : null,
                       isUnavailable ? styles.slotButtonUnavailable : null,
                     ]}
@@ -577,7 +564,6 @@ export function BookingFlow({ location_id, location, address, cars, onBack, onBe
                       style={[
                         styles.slotText,
                         isEndpoint ? styles.slotTextSelected : null,
-                        isInRange ? styles.slotTextRange : null,
                         isTaken ? styles.slotTextTaken : null,
                         isUnavailable ? styles.slotTextUnavailable : null,
                       ]}
@@ -592,7 +578,10 @@ export function BookingFlow({ location_id, location, address, cars, onBack, onBe
 
           <View style={styles.rateBanner}>
             <Ionicons name="information-circle-outline" size={18} color={COLORS.primary} />
-            <Text style={styles.rateText}>Rate: P50 / hr - Booking window: {MALL_HOURS_LABEL}</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.rateText}>Rate: P100 (2x P50/hr). Overtime fee: P15.</Text>
+              <Text style={[styles.rateText, { marginTop: 4, fontSize: 10 }]}>Cancellation: 50% refund within timeframe. Non-refundable after timeframe.</Text>
+            </View>
           </View>
         </View>
       </ScrollView>
@@ -607,6 +596,37 @@ export function BookingFlow({ location_id, location, address, cars, onBack, onBe
           <Text style={styles.prototypeCtaText}>{canContinue ? `Next: Payment - ₱${totalAmount}` : 'Select a Time Range to Continue'}</Text>
         </Pressable>
       </View>
+
+      <Modal visible={showFloorModal} transparent animationType="fade" onRequestClose={() => setShowFloorModal(false)}>
+        <View style={styles.datePickerOverlay}>
+          <View style={[styles.datePickerCard, { padding: 24, alignItems: 'center' }]}>
+            <View style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: '#F8FAFC', alignItems: 'center', justifyContent: 'center', marginBottom: 16 }}>
+              <Ionicons name="location-outline" size={24} color={COLORS.navy} />
+            </View>
+            <Text style={{ fontSize: 20, fontWeight: '900', color: COLORS.navy, marginBottom: 8 }}>Preferred Floor?</Text>
+            <Text style={{ fontSize: 13, color: COLORS.muted, marginBottom: 24 }}>Choose where you want to park.</Text>
+            
+            <View style={{ flexDirection: 'row', gap: 10, width: '100%', marginBottom: 12 }}>
+              {['L1', 'L2', 'L3'].map(floor => (
+                <Pressable
+                  key={floor}
+                  onPress={() => proceedToPayment(floor)}
+                  style={{ flex: 1, height: 48, borderRadius: 12, borderWidth: 1, borderColor: '#EDF0F4', alignItems: 'center', justifyContent: 'center' }}
+                >
+                  <Text style={{ fontSize: 14, fontWeight: '800', color: COLORS.navy }}>{floor}</Text>
+                </Pressable>
+              ))}
+            </View>
+            <Pressable
+              onPress={() => proceedToPayment('Auto-Assign Best Spot')}
+              style={{ width: '100%', height: 48, borderRadius: 12, backgroundColor: '#0F172A', alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8 }}
+            >
+              <Ionicons name="sparkles" size={16} color="white" />
+              <Text style={{ fontSize: 14, fontWeight: '800', color: 'white' }}>Auto-Assign Best Spot</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
 
       <Modal visible={showDatePicker} transparent animationType="fade" onRequestClose={() => setShowDatePicker(false)}>
         <View style={styles.datePickerOverlay}>
@@ -712,7 +732,7 @@ export function BookingFlow({ location_id, location, address, cars, onBack, onBe
             <View style={styles.summaryRow}>
               <Text style={styles.paymentSummaryLabel}>Time Slot</Text>
               <Text style={styles.paymentSummaryValue}>
-                {formatHour(startTime || '11:00')} - {formatHour(endTime || '22:00')}
+                {selectedSlot ? selectedSlot.label : '11:00 - 12:00'}
               </Text>
             </View>
             <View style={styles.summaryRow}>
@@ -834,7 +854,7 @@ export function BookingFlow({ location_id, location, address, cars, onBack, onBe
           {[
             { label: 'Location', value: displayLocationName },
             { label: 'Date', value: reviewDate },
-            { label: 'Time', value: `${formatHour(startTime || '11:00')} - ${formatHour(endTime || '22:00')}` },
+            { label: 'Time', value: selectedSlot ? selectedSlot.label : '11:00 - 12:00' },
             { label: 'Vehicle', value: bookingPlate || '---' },
             { label: 'Payment', value: paymentLabel },
           ].map((item) => (
@@ -959,7 +979,7 @@ export function BookingFlow({ location_id, location, address, cars, onBack, onBe
                     <View style={styles.epassInfoRight}>
                       <Text style={styles.epassInfoLabel}>Time Slot</Text>
                       <Text style={styles.epassInfoValue}>
-                        {formatHour(startTime || '11:00')} - {formatHour(endTime || '22:00')}
+                        {selectedSlot ? selectedSlot.label : '11:00 - 12:00'}
                       </Text>
                     </View>
                     <View style={styles.epassInfo}>
@@ -1808,3 +1828,4 @@ const styles = StyleSheet.create({
     color: COLORS.navy,
   },
 });
+

@@ -51,7 +51,6 @@ export function ForgotPasswordModal({
   const [loading, setLoading] = useState(false);
   const [resendTimer, setResendTimer] = useState(0);
   const [resetToken, setResetToken] = useState('');
-  const [devOtp, setDevOtp] = useState('');
 
   // Resend timer countdown
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -74,7 +73,6 @@ export function ForgotPasswordModal({
     setLoading(false);
     setResendTimer(0);
     setResetToken('');
-    setDevOtp('');
     if (timerRef.current) clearInterval(timerRef.current);
   }
 
@@ -101,8 +99,7 @@ export function ForgotPasswordModal({
     setError('');
     setLoading(true);
     try {
-      const response = await backendApi.forgotPassword(trimmed);
-      setDevOtp(response?.devOtp || '');
+      await backendApi.forgotPassword(trimmed);
       setStep('otp');
       setOtp('');
       startResendTimer();
@@ -121,8 +118,7 @@ export function ForgotPasswordModal({
     setError('');
     setLoading(true);
     try {
-      const response = await backendApi.forgotPassword(identifier.trim());
-      setDevOtp(response?.devOtp || '');
+      await backendApi.forgotPassword(identifier.trim());
     } catch {
       // Fail silently
     } finally {
@@ -286,10 +282,10 @@ export function ForgotPasswordModal({
           {/* ── Step 2: OTP input ── */}
           {step === 'otp' && (
             <View style={styles.formBlock}>
-              <View style={styles.devHint}>
-                <Feather name="info" size={13} color="#2563EB" />
-                <Text style={styles.devHintText}>
-                  {devOtp ? `Development OTP: ${devOtp}` : 'We’ve sent a verification code to your email. Please check your inbox and enter the OTP to continue.'}
+              <View style={styles.infoHint}>
+                <Feather name="mail" size={13} color="#2563EB" />
+                <Text style={styles.infoHintText}>
+                  We've sent a verification code to your email. Please check your inbox and enter the OTP to continue.
                 </Text>
               </View>
               <TextInput
@@ -539,7 +535,7 @@ const styles = StyleSheet.create({
     color: '#C3CFDC',
     fontWeight: '700',
   },
-  devHint: {
+  infoHint: {
     flexDirection: 'row',
     alignItems: 'flex-start',
     gap: 8,
@@ -550,7 +546,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#BFDBFE',
   },
-  devHintText: {
+  infoHintText: {
     flex: 1,
     color: '#1D4ED8',
     fontSize: 11,
