@@ -83,6 +83,7 @@ export function AdminProfile({ onBack }: AdminProfileProps) {
 
   // Parking rates
   const [rates, setRates] = useState<ParkingRate[]>([]);
+  const activeRate = rates[0];
   const [ratesLoading, setRatesLoading] = useState(false);
   const [gateModal, setGateModal] = useState(false);
   const [rateModal, setRateModal] = useState(false);
@@ -668,14 +669,16 @@ export function AdminProfile({ onBack }: AdminProfileProps) {
                 <Text style={s.cardTitle}>Parking Rates</Text>
                 <Text style={{ fontSize: 12, color: colors.muted, marginTop: 2 }}>Manage pricing and vehicle rules</Text>
               </View>
-              <TouchableOpacity
-                style={[s.editBtn, { flexDirection: 'row', alignItems: 'center', gap: 5 }]}
-                onPress={() => openRateGate()}
-                accessibilityLabel="Add Rate"
-              >
-                <Ionicons name="add" size={16} color="#fff" />
-                <Text style={s.editBtnText}>Add Rate</Text>
-              </TouchableOpacity>
+              {rates.length === 0 && (
+                <TouchableOpacity
+                  style={[s.editBtn, { flexDirection: 'row', alignItems: 'center', gap: 5 }]}
+                  onPress={() => openRateGate()}
+                  accessibilityLabel="Add Rate"
+                >
+                  <Ionicons name="add" size={16} color="#fff" />
+                  <Text style={s.editBtnText}>Add Rate</Text>
+                </TouchableOpacity>
+              )}
             </View>
             {ratesLoading && <ActivityIndicator size="small" color={colors.orange} style={{ marginVertical: 16 }} />}
             {!ratesLoading && rates.length === 0 && (
@@ -684,39 +687,39 @@ export function AdminProfile({ onBack }: AdminProfileProps) {
                 <Text style={{ color: colors.muted, marginTop: 8 }}>No parking rates found.</Text>
               </View>
             )}
-            {!ratesLoading && rates.map((rate) => (
-              <View key={rate.id} style={s.rateItem}>
+            {!ratesLoading && activeRate && (
+              <View key={activeRate.id} style={s.rateItem}>
                 <View style={s.rateTop}>
                   <View style={s.rateIconBg}>
-                    <Ionicons name={getRateIcon(rate.type) as any} size={20} color="#fff" />
+                    <Ionicons name={getRateIcon(activeRate.type) as any} size={20} color="#fff" />
                   </View>
                   <View style={{ flex: 1 }}>
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                      <Text style={s.rateName}>{getRateLabel(rate.type)} Rate</Text>
-                      <View style={[s.statusBadge, rate.status === 'inactive' ? s.statusBadgeInactive : s.statusBadgeActive]}>
-                        <Text style={[s.statusBadgeText, rate.status === 'inactive' ? s.statusBadgeTextInactive : s.statusBadgeTextActive]}>
-                          {rate.status === 'inactive' ? 'INACTIVE' : 'ACTIVE'}
+                      <Text style={s.rateName}>{getRateLabel(activeRate.type)} Rate</Text>
+                      <View style={[s.statusBadge, activeRate.status === 'inactive' ? s.statusBadgeInactive : s.statusBadgeActive]}>
+                        <Text style={[s.statusBadgeText, activeRate.status === 'inactive' ? s.statusBadgeTextInactive : s.statusBadgeTextActive]}>
+                          {activeRate.status === 'inactive' ? 'INACTIVE' : 'ACTIVE'}
                         </Text>
                       </View>
                     </View>
                     <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 4, marginTop: 4 }}>
-                      <Text style={s.rateHourly}>₱{Number(rate.rate).toLocaleString()}</Text>
-                      <Text style={s.rateDaily}>{getRateUnit(rate.type)}</Text>
+                      <Text style={s.rateHourly}>₱{Number(activeRate.rate).toLocaleString()}</Text>
+                      <Text style={s.rateDaily}>{getRateUnit(activeRate.type)}</Text>
                     </View>
                   </View>
                 </View>
                 <View style={s.rateBtns}>
-                  <TouchableOpacity style={s.rateEditBtn} onPress={() => openRateGate(rate)} accessibilityLabel="Edit">
+                  <TouchableOpacity style={s.rateEditBtn} onPress={() => openRateGate(activeRate)} accessibilityLabel="Edit">
                     <Ionicons name="create-outline" size={13} color={ADMIN_SETTINGS_HIGHLIGHT} />
                     <Text style={s.rateEditBtnText}>Edit</Text>
                   </TouchableOpacity>
-                  <TouchableOpacity style={s.rateDeleteBtn} onPress={() => deleteRate(rate.id)} accessibilityLabel="Delete">
+                  <TouchableOpacity style={s.rateDeleteBtn} onPress={() => deleteRate(activeRate.id)} accessibilityLabel="Delete">
                     <Ionicons name="trash-outline" size={13} color="#EF4444" />
                     <Text style={s.rateDeleteBtnText}>Delete</Text>
                   </TouchableOpacity>
                 </View>
               </View>
-            ))}
+            )}
           </View>
         )}
       </ScrollView>
@@ -890,16 +893,7 @@ export function AdminProfile({ onBack }: AdminProfileProps) {
                       <TouchableOpacity onPress={() => setRateModal(false)} style={s.closeBtn}><Ionicons name="close" size={22} color="#fff" /></TouchableOpacity>
                     </View>
                     <View style={{ padding: 16, gap: 14 }}>
-                      <View>
-                        <Text style={s.label}>RATE TYPE</Text>
-                        <View style={{ flexDirection: 'row', gap: 8, marginTop: 6 }}>
-                          {(editingRate ? ['hourly'] as RateType[] : ['hourly', 'daily', 'monthly'] as RateType[]).map((t) => (
-                            <TouchableOpacity key={t} style={{ flex: 1, paddingVertical: 10, borderRadius: 10, alignItems: 'center', backgroundColor: rateForm.type === t ? ADMIN_SETTINGS_HIGHLIGHT : '#F1F5F9', borderWidth: 1, borderColor: rateForm.type === t ? ADMIN_SETTINGS_HIGHLIGHT : colors.border }} onPress={() => setRateForm({ ...rateForm, type: t })}>
-                              <Text style={{ fontSize: 12, fontWeight: '700', color: rateForm.type === t ? '#fff' : colors.muted }}>{t.charAt(0).toUpperCase() + t.slice(1)}</Text>
-                            </TouchableOpacity>
-                          ))}
-                        </View>
-                      </View>
+
                       <View>
                         <Text style={s.label}>AMOUNT</Text>
                         <TextInput style={[s.fieldInput, { marginTop: 6 }]} value={rateForm.rate} onChangeText={(v) => setRateForm({ ...rateForm, rate: v.replace(/[^0-9.]/g, '') })} keyboardType="decimal-pad" placeholder={getPlaceholder(rateForm.type)} placeholderTextColor={colors.muted} />

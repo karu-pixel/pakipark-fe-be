@@ -354,7 +354,7 @@ export function BookingFlow({ location_id, location, address, cars, onBack, onBe
 
   const buildBookingDetails = () => {
     const safeStart = selectedSlot ? selectedSlot.value : '11:00';
-    const endHourStr = `${parseInt(safeStart.split(':')[0], 10) + 1}:00`;
+    const endHourStr = `${parseInt(safeStart.split(':')[0] ?? '11', 10) + 1}:00`;
     const safeEnd = selectedSlot ? (selectedSlot.label.split(' - ')[1] || endHourStr) : '12:00';
 
     return {

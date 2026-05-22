@@ -57,6 +57,7 @@
   "devDependencies": {
     "@expo/ngrok": "^4.1.0",
     "@types/jest": "~29.5.14",
+    "@types/multer": "^2.1.0",
     "@types/node": "^25.5.0",
     "@types/react": "~19.1.10",
     "@typescript-eslint/parser": "^8.57.2",

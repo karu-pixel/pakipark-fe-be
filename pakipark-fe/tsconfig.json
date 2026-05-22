@@ -5,7 +5,7 @@
     "allowJs": false,
     "noUncheckedIndexedAccess": true,
     "baseUrl": ".",
-    "types": ["node", "multer"],
+    "types": ["node", "multer", "jest"],
     "paths": {
     "@app/*": ["src/bootstrap/*"],
     "@config/*": ["src/config/*"],
