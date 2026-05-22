@@ -1,0 +1,646 @@
+import React, { useState } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { AntDesign, Feather } from '@expo/vector-icons';
+import { backendApi } from '../../../lib/api';
+import { SocialAuthModal } from '../../auth/components/SocialAuthModal';
+
+const COLORS = {
+  background: '#DBF0EF',
+  border: '#D7ECE8',
+  card: '#FFFFFF',
+  dark: '#021B1A',
+  inputBackground: '#EFF8F7',
+  inputIcon: '#A6D9D4',
+  muted: '#8D95B2',
+  primary: '#39B5A8',
+  white: '#FFFFFF',
+  danger: '#EF4444',
+} as const;
+
+type PakiShipLoginScreenProps = {
+  onBack: () => void;
+  onNavigateToCreateAccount: () => void;
+  onAuthSuccess: (role: 'customer' | 'admin' | 'partner') => void;
+};
+
+export function PakiShipLoginScreen({
+  onBack,
+  onNavigateToCreateAccount,
+  onAuthSuccess,
+}: PakiShipLoginScreenProps) {
+  const [identifier, setIdentifier] = useState('');
+  const [password, setPassword] = useState('');
+  const [twoFactorRequired, setTwoFactorRequired] = useState(false);
+  const [twoFactorCode, setTwoFactorCode] = useState('');
+  const [rememberMe, setRememberMe] = useState(false);
+  const [secureTextEntry, setSecureTextEntry] = useState(true);
+  const [isSubmitting, setSubmitting] = useState(false);
+  const [activeSocialProvider, setActiveSocialProvider] = useState<string | null>(null);
+
+  // Forgot password states
+  const [isResetModalVisible, setResetModalVisible] = useState(false);
+  const [resetIdentifier, setResetIdentifier] = useState('');
+  const [isResetSubmitting, setResetSubmitting] = useState(false);
+
+  const handleContinue = async () => {
+    if (!identifier.trim() || !password.trim()) {
+      Alert.alert('Missing details', 'Enter your email or mobile number and password to continue.');
+      return;
+    }
+
+    if (twoFactorRequired && !/^\d{6}$/.test(twoFactorCode.trim())) {
+      Alert.alert('Invalid Code', 'Enter the 6-digit code from your authenticator app.');
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      // Connect
+        const user = await backendApi.login(
+
+        identifier.trim(),
+        password,
+        twoFactorRequired ? twoFactorCode.trim() : undefined,
+        'pakiship',
+        rememberMe,
+      );
+
+      if (user.two_factor_required) {
+        setTwoFactorRequired(true);
+        setTwoFactorCode('');
+        return;
+      }
+
+      setTwoFactorRequired(false);
+
+      Alert.alert('Login Success', `Welcome back to PakiShip, ${user.name}!`);
+      
+      const resolvedRole = user.role === 'business_partner' ? 'partner' : user.role;
+      onAuthSuccess(resolvedRole as any);
+    } catch (err: any) {
+      Alert.alert('Login Failed', err.message || 'Invalid credentials or connection issue.');
+      if (twoFactorRequired) {
+        setTwoFactorCode('');
+      }
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleOpenReset = () => {
+    setResetIdentifier(identifier.trim());
+    setResetModalVisible(true);
+  };
+
+  const handleResetPassword = async () => {
+    if (!resetIdentifier.trim()) {
+      Alert.alert('Reset Password', 'Enter your email or mobile number to continue.');
+      return;
+    }
+
+    setResetSubmitting(true);
+    try {
+      await backendApi.forgotPassword(resetIdentifier.trim());
+      setResetModalVisible(false);
+      Alert.alert('Instructions Sent', `Password reset instructions have been sent to ${resetIdentifier.trim()}.`);
+    } catch (err: any) {
+      setResetModalVisible(false);
+      // Still show success message — avoids email enumeration
+      Alert.alert('Instructions Sent', `If that account exists, password reset instructions have been sent.`);
+    } finally {
+      setResetSubmitting(false);
+    }
+  };
+
+  const handleSocialClick = (provider: string) => {
+    setActiveSocialProvider(provider);
+  };
+
+  return (
+    <SafeAreaView style={styles.safeArea}>
+      <View style={styles.headerBar}>
+        <Pressable accessibilityRole="button" hitSlop={8} onPress={onBack} style={styles.backButton}>
+          <AntDesign color={COLORS.primary} name="left" size={18} />
+        </Pressable>
+      </View>
+
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        style={styles.flex}
+      >
+        <ScrollView
+          contentContainerStyle={styles.content}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
+          <View style={styles.heroBlock}>
+            <Text style={styles.heroTitleDark}>Hatid Agad,</Text>
+            <Text style={styles.heroTitlePrimary}>Walang Abala.</Text>
+          </View>
+
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>Log In</Text>
+            <Text style={styles.cardSubtitle}>
+              Welcome back! Log in to manage your shipments.
+            </Text>
+
+            <View style={styles.fieldGroup}>
+              <Text style={styles.inputLabel}>Email or Mobile Number</Text>
+              <View style={styles.inputRow}>
+                <Feather color={COLORS.inputIcon} name="mail" size={18} />
+                <TextInput
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  keyboardType="default"
+                  onChangeText={setIdentifier}
+                  placeholder="customer@pakiship.com"
+                  placeholderTextColor="#C5CBDC"
+                  style={styles.textInput}
+                  value={identifier}
+                  editable={!isSubmitting}
+                />
+              </View>
+            </View>
+
+            <View style={styles.fieldGroup}>
+              <Text style={styles.inputLabel}>Password</Text>
+              <View style={styles.inputRow}>
+                <Feather color={COLORS.inputIcon} name="lock" size={18} />
+                <TextInput
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  onChangeText={setPassword}
+                  placeholder="********"
+                  placeholderTextColor="#C5CBDC"
+                  secureTextEntry={secureTextEntry}
+                  style={styles.textInput}
+                  value={password}
+                  editable={!isSubmitting}
+                />
+                <Pressable hitSlop={8} onPress={() => setSecureTextEntry((current) => !current)}>
+                  <Feather
+                    color="#CDD2DF"
+                    name={secureTextEntry ? 'eye' : 'eye-off'}
+                    size={18}
+                  />
+                </Pressable>
+              </View>
+            </View>
+
+            {twoFactorRequired && (
+              <View style={styles.fieldGroup}>
+                <Text style={styles.inputLabel}>2FA Code</Text>
+                <View style={styles.inputRow}>
+                  <Feather color={COLORS.inputIcon} name="key" size={18} />
+                  <TextInput
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    keyboardType="number-pad"
+                    onChangeText={setTwoFactorCode}
+                    placeholder="6-digit code"
+                    placeholderTextColor="#C5CBDC"
+                    style={styles.textInput}
+                    value={twoFactorCode}
+                    editable={!isSubmitting}
+                  />
+                </View>
+              </View>
+            )}
+
+            <View style={styles.rememberRow}>
+              <Pressable onPress={() => setRememberMe((current) => !current)} style={styles.rememberLeft}>
+                <View style={[styles.checkbox, rememberMe ? styles.checkboxChecked : null]}>
+                  {rememberMe ? <Feather color={COLORS.white} name="check" size={12} /> : null}
+                </View>
+                <Text style={styles.rememberText}>Remember me</Text>
+              </Pressable>
+
+              <Pressable onPress={handleOpenReset}>
+                <Text style={styles.forgotText}>Forgot Password?</Text>
+              </Pressable>
+            </View>
+
+            <Pressable
+              onPress={handleContinue}
+              style={[styles.continueButton, isSubmitting ? styles.continueButtonDisabled : null]}
+              disabled={isSubmitting}
+            >
+              {isSubmitting ? (
+                <ActivityIndicator size="small" color={COLORS.white} />
+              ) : (
+                <Text style={styles.continueButtonText}>{twoFactorRequired ? 'Verify & Continue' : 'Continue'}</Text>
+              )}
+            </Pressable>
+
+            {/* Premium PakiShip Google OAuth grid integration */}
+            <View style={styles.socialBlock}>
+              <View style={styles.dividerRow}>
+                <View style={styles.divider} />
+                <Text style={styles.dividerLabel}>Or Connect With</Text>
+                <View style={styles.divider} />
+              </View>
+
+              <View style={styles.socialGrid}>
+                <Pressable
+                  onPress={() => handleSocialClick('Google')}
+                  style={styles.socialButton}
+                >
+                  <AntDesign name="google" size={20} color={COLORS.primary} />
+                </Pressable>
+              </View>
+            </View>
+
+            <View style={styles.createRow}>
+              <Text style={styles.createText}>New to PakiSHIP? </Text>
+              <Pressable onPress={onNavigateToCreateAccount}>
+                <Text style={styles.createLink}>Create Account</Text>
+              </Pressable>
+            </View>
+          </View>
+        </ScrollView>
+      </KeyboardAvoidingView>
+
+      <Modal
+        animationType="fade"
+        onRequestClose={() => setResetModalVisible(false)}
+        transparent={true}
+        visible={isResetModalVisible}
+      >
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          style={styles.flex}
+        >
+          <View style={styles.modalOverlay}>
+            <Pressable
+              onPress={() => setResetModalVisible(false)}
+              style={StyleSheet.absoluteFillObject}
+            />
+
+            <View style={styles.modalSheet}>
+              <Pressable
+                hitSlop={8}
+                onPress={() => setResetModalVisible(false)}
+                style={styles.modalClose}
+              >
+                <AntDesign color="#A5AEC6" name="close" size={20} />
+              </Pressable>
+
+              <View style={styles.modalIconBox}>
+                <Feather color={COLORS.primary} name="lock" size={24} />
+              </View>
+
+              <Text style={styles.modalTitle}>Reset Password</Text>
+              <Text style={styles.modalSubtitle}>
+                Enter your details to receive a reset link.
+              </Text>
+
+              <View style={styles.modalInputShell}>
+                <TextInput
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  onChangeText={setResetIdentifier}
+                  placeholder="Email or Mobile"
+                  placeholderTextColor="#B1DCD6"
+                  style={styles.modalInput}
+                  value={resetIdentifier}
+                  editable={!isResetSubmitting}
+                />
+              </View>
+
+              <Pressable
+                onPress={handleResetPassword}
+                style={[styles.resetButton, isResetSubmitting ? styles.resetButtonDisabled : null]}
+                disabled={isResetSubmitting}
+              >
+                {isResetSubmitting ? (
+                  <ActivityIndicator size="small" color={COLORS.white} />
+                ) : (
+                  <Text style={styles.resetButtonText}>Send Reset Link</Text>
+                )}
+              </Pressable>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      <SocialAuthModal
+        visible={activeSocialProvider !== null}
+        provider={activeSocialProvider || ''}
+        onClose={() => setActiveSocialProvider(null)}
+        onSuccess={(role) => {
+          onAuthSuccess(role);
+        }}
+      />
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+    backgroundColor: COLORS.background,
+  },
+  flex: {
+    flex: 1,
+  },
+  headerBar: {
+    height: 52,
+    paddingHorizontal: 18,
+    justifyContent: 'center',
+    backgroundColor: '#FFFFFF',
+    borderBottomWidth: 1,
+    borderBottomColor: '#EEF0F3',
+  },
+  backButton: {
+    width: 28,
+    height: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  content: {
+    flexGrow: 1,
+    paddingHorizontal: 18,
+    paddingTop: 26,
+    paddingBottom: 32,
+  },
+  heroBlock: {
+    alignItems: 'center',
+    marginBottom: 24,
+  },
+  heroTitleDark: {
+    color: COLORS.dark,
+    fontSize: 40,
+    fontWeight: '900',
+    letterSpacing: -1.2,
+    lineHeight: 44,
+    textAlign: 'center',
+  },
+  heroTitlePrimary: {
+    color: COLORS.primary,
+    fontSize: 40,
+    fontWeight: '900',
+    letterSpacing: -1.2,
+    lineHeight: 44,
+    textAlign: 'center',
+  },
+  card: {
+    borderRadius: 36,
+    backgroundColor: COLORS.card,
+    paddingHorizontal: 24,
+    paddingTop: 26,
+    paddingBottom: 22,
+    borderWidth: 1,
+    borderColor: '#F3F3F3',
+    shadowColor: '#052A27',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.06,
+    shadowRadius: 18,
+    elevation: 5,
+  },
+  cardTitle: {
+    color: COLORS.dark,
+    fontSize: 32,
+    fontWeight: '800',
+    textAlign: 'center',
+    marginBottom: 8,
+  },
+  cardSubtitle: {
+    color: COLORS.muted,
+    fontSize: 14,
+    fontWeight: '600',
+    lineHeight: 20,
+    textAlign: 'center',
+    marginBottom: 18,
+    paddingHorizontal: 14,
+  },
+  fieldGroup: {
+    marginBottom: 16,
+  },
+  inputLabel: {
+    color: COLORS.primary,
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 2.2,
+    textTransform: 'uppercase',
+    marginBottom: 8,
+    paddingLeft: 4,
+  },
+  inputRow: {
+    minHeight: 56,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    backgroundColor: COLORS.inputBackground,
+    paddingHorizontal: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  textInput: {
+    flex: 1,
+    color: COLORS.dark,
+    fontSize: 15,
+    fontWeight: '600',
+    paddingVertical: 12,
+  },
+  rememberRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 6,
+    marginBottom: 20,
+    gap: 12,
+  },
+  rememberLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    flex: 1,
+  },
+  checkbox: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 1.5,
+    borderColor: '#D8DCE7',
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  checkboxChecked: {
+    backgroundColor: COLORS.primary,
+    borderColor: COLORS.primary,
+  },
+  rememberText: {
+    color: '#5C6783',
+    fontSize: 13,
+    fontWeight: '500',
+  },
+  forgotText: {
+    color: COLORS.primary,
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  continueButton: {
+    minHeight: 56,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: COLORS.dark,
+    shadowColor: '#021B1A',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.14,
+    shadowRadius: 18,
+    elevation: 4,
+  },
+  continueButtonDisabled: {
+    opacity: 0.7,
+  },
+  continueButtonText: {
+    color: COLORS.white,
+    fontSize: 14,
+    fontWeight: '800',
+    letterSpacing: 3,
+    textTransform: 'uppercase',
+  },
+  socialBlock: {
+    marginTop: 20,
+    gap: 12,
+  },
+  dividerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  divider: {
+    flex: 1,
+    height: 1,
+    backgroundColor: COLORS.border,
+  },
+  dividerLabel: {
+    color: COLORS.muted,
+    fontSize: 10,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+    letterSpacing: 1.4,
+  },
+  socialGrid: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 16,
+  },
+  socialButton: {
+    width: 56,
+    height: 52,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  createRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    marginTop: 20,
+    paddingTop: 4,
+  },
+  createText: {
+    color: COLORS.muted,
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  createLink: {
+    color: COLORS.primary,
+    fontSize: 14,
+    fontWeight: '800',
+    textDecorationLine: 'underline',
+  },
+  modalOverlay: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(4,22,20,0.55)',
+  },
+  modalSheet: {
+    backgroundColor: COLORS.card,
+    borderTopLeftRadius: 34,
+    borderTopRightRadius: 34,
+    paddingHorizontal: 26,
+    paddingTop: 26,
+    paddingBottom: 40,
+  },
+  modalClose: {
+    position: 'absolute',
+    top: 22,
+    right: 22,
+    zIndex: 1,
+    padding: 6,
+  },
+  modalIconBox: {
+    width: 62,
+    height: 62,
+    borderRadius: 20,
+    backgroundColor: '#F1FAF8',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 20,
+  },
+  modalTitle: {
+    color: COLORS.dark,
+    fontSize: 30,
+    fontWeight: '800',
+    marginBottom: 8,
+  },
+  modalSubtitle: {
+    color: COLORS.muted,
+    fontSize: 14,
+    lineHeight: 20,
+    marginBottom: 24,
+  },
+  modalInputShell: {
+    minHeight: 58,
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    backgroundColor: COLORS.inputBackground,
+    paddingHorizontal: 18,
+    justifyContent: 'center',
+    marginBottom: 18,
+  },
+  modalInput: {
+    color: COLORS.dark,
+    fontSize: 15,
+    fontWeight: '600',
+    paddingVertical: 12,
+  },
+  resetButton: {
+    minHeight: 56,
+    borderRadius: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#9EE0D3',
+  },
+  resetButtonDisabled: {
+    opacity: 0.7,
+  },
+  resetButtonText: {
+    color: COLORS.white,
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 2.2,
+    textTransform: 'uppercase',
+  },
+});

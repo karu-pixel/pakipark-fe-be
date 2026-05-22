@@ -1,0 +1,1 @@
+Get-ChildItem -Path 'c:\Users\Juliana Mari Alejo\Downloads' -Filter 'CustomerProfile.tsx' -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.FullName -like '*pakipark-fe-be-fix-profile-2fa-password-copy*' } | Select-Object -Property FullName, Length | Format-List
