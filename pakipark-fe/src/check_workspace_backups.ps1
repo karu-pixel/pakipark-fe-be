@@ -1,0 +1,1 @@
+Get-ChildItem -Path 'c:\Users\Juliana Mari Alejo\Downloads\pakipark-fe-be-fix-profile-2fa-password-copy\pakipark-fe-be-fix-profile-2fa-password-copy' -Include '*.zip','*.bak','*.rar','*.7z','*.tmp' -Recurse -ErrorAction SilentlyContinue | Select-Object -Property FullName, Length, LastWriteTime | Format-List
